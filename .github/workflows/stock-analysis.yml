@@ -1,0 +1,87 @@
+name: Stock Analysis
+
+on:
+  schedule:
+    # 8:00 AM IST → 2:30 UTC
+    - cron: "30 2 * * *"
+    # 5:00 PM IST → 11:30 UTC
+    - cron: "30 11 * * *"
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Prevent overlapping runs (important for DB integrity)
+concurrency:
+  group: stock-db-update
+  cancel-in-progress: false
+
+jobs:
+  run-stock:
+    runs-on: ubuntu-latest
+
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install --upgrade yfinance pandas sqlalchemy requests google-genai
+
+      # Run your stock analyzer
+      - name: Run Stock Analyzer
+        run: |
+          python stock_analyzer.py
+
+      # Commit DB changes safely
+      - name: Commit and Push DB
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+          git add stock_rotation.db
+
+          # Exit if no changes
+          if git diff --staged --quiet; then
+            echo "No database changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Auto-update stock analysis database"
+
+          # Retry push (network safe)
+          max_retries=3
+          attempt=1
+          success=false
+
+          while [ $attempt -le $max_retries ]; do
+            echo "Push attempt $attempt..."
+
+            if git push; then
+              echo "Push successful"
+              success=true
+              break
+            else
+              wait_time=$((2 ** attempt * 5))
+              echo "Push failed. Retrying in $wait_time sec..."
+              sleep $wait_time
+              attempt=$((attempt + 1))
+            fi
+          done
+
+          if [ "$success" = false ]; then
+            echo "Failed to push after retries"
+            exit 1
+          fi

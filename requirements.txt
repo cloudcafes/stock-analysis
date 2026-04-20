@@ -1,0 +1,6 @@
+yfinance
+SQLAlchemy
+pandas
+scipy
+scikit-learn
+prometheus_client
